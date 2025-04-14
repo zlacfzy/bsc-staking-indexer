@@ -1,52 +1,70 @@
 name: Docker
 
 on:
-  push:
-    # Publish `v1.2.3` tags as releases.
-    tags:
-      - v*
+  workflow_dispatch:
+    inputs:
+      checkout_ref:
+        required: true
+        type: string
+        default: 'main'
+        description: 'The branch to checkout and build artifacts from. By default "main".'
+      release_version:
+        required: true
+        type: string
+        description: 'Release version number (Pattern - v#.#.# , f.e. v2.60.1 or v3.0.0 or v3.0.0-alpha1 for pre-releases. Use prefix "v".)'
+      perform_release:
+        required: false
+        type: boolean
+        default: false
+        description: 'perform_release: when set then all artifacts will be published and the DRAFT of the release notes will be created.'
 
 env:
-  IMAGE_NAME: bsc-mev-sentry
+  IMAGE_NAME: "bsc-staking-indexer"
+  APP_REPO: "bnb-chain/bsc-staking-indexer"
+  DOCKERHUB_REPOSITORY: "ghcr.io/bnb-chain/bsc-staking-indexer"
+
+
 
 jobs:
   # Push image to GitHub Packages.
-  push:
+  docker-release:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout git repository ${{ env.APP_REPO }} reference ${{ inputs.checkout_ref }}
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 ## 4.1.7 release
+        with:
+          repository: ${{ env.APP_REPO }}
+          fetch-depth: 0
+          ref: ${{ inputs.checkout_ref }}
+          path: 'bsc-staking-indexer'
 
-      - name: Build image
+      - name: Check if tag ${{ inputs.release_version }} already exists and create it in case perform_release is set.
+        if: ${{ (inputs.perform_release) && (inputs.release_version != '') }}
         run: |
-            docker build . \
-            --build-arg GIT_TOKEN=${{secrets.GIT_TOKEN}} \
-            --label "org.opencontainers.image.source=${{ secrets.IMAGE_SOURCE }}" \
-            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
-            --label "org.opencontainers.image.version=$(git describe --tags --abbrev=0)" \
-            --label "org.opencontainers.image.licenses=LGPL-3.0,GPL-3.0" \
-            -f ./Dockerfile -t "${IMAGE_NAME}"
+          cd bsc-staking-indexer
+          if git ls-remote --exit-code --quiet --tags origin '${{ inputs.release_version }}'; then
+            echo "ERROR: tag ${{ inputs.release_version }} exists and workflow is performing release. Exit."
+            exit 1
+          else
+            echo "OK: tag ${{ inputs.release_version }} does not exists. Proceeding."
+            git tag ${{ inputs.release_version }}
+            git push origin ${{ inputs.release_version }}
+            echo; echo "Git TAG ${{ inputs.release_version }} created and pushed."
+          fi
 
       - name: Log into registry
         run: echo "${{ secrets.PACKAGE_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Push image
+
+      - name: Build image and push
         run: |
-          IMAGE_ID=ghcr.io/${{ github.repository }}
-          
-          # Change all uppercase to lowercase
-          IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
-          # Strip git ref prefix from version
-          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
-          # Strip "v" prefix from tag name
-          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
-          # Use Docker `latest` tag convention
-          [ "$VERSION" == "master" ] && VERSION=latest
-          echo IMAGE_ID=$IMAGE_ID
-          echo VERSION=$VERSION
-          docker tag $IMAGE_NAME $IMAGE_ID:$VERSION
-          docker tag $IMAGE_NAME $IMAGE_ID:latest
-          docker push $IMAGE_ID:$VERSION
-          docker push $IMAGE_ID:latest
-          
+            docker build . \
+            --build-arg GIT_TOKEN_URL=${{secrets.GIT_TOKEN_URL}} \
+            --tag ${{ env.DOCKERHUB_REPOSITORY }}:${{ inputs.release_version }} \
+            --tag ${{ env.DOCKERHUB_REPOSITORY }}:latest \
+            --label "org.opencontainers.image.source=${{ secrets.IMAGE_SOURCE }}" \
+            --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+            --label "org.opencontainers.image.version=$(git describe --tags --abbrev=0)" \
+            --label "org.opencontainers.image.licenses=LGPL-3.0,GPL-3.0" \
+            -f ./Dockerfile -t  ${{ env.IMAGE_NAME }}
