@@ -1,6 +1,6 @@
 FROM public.ecr.aws/docker/library/golang:1.21-alpine AS builder
 
-ARG GIT_TOKEN
+ARG GIT_TOKEN_URL
 
 ENV GO111MODULE=on \
     CGO_ENABLED=1 \
@@ -13,7 +13,7 @@ RUN apk add --no-cache build-base git bash linux-headers eudev-dev curl ca-certi
 WORKDIR /build
 COPY . .
 
-RUN echo "https://reneecok:${GIT_TOKEN}@github.com" > ~/.git-credentials \
+RUN echo "${GIT_TOKEN_URL}" > ~/.git-credentials \
     && git config --global credential.helper store
 
 RUN go mod tidy
